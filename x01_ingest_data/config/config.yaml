@@ -1,0 +1,179 @@
+files_to_use:
+  - hh_mod_a_filt.dta
+  - HH_MOD_L.dta
+  - HH_MOD_M.dta
+  - HH_MOD_F.dta
+  - HH_MOD_H.dta
+  - HH_MOD_T.dta
+  - ihs5_consumption_aggregate.dta
+  - HH_MOD_U.dta
+
+
+known_categorical_columns:
+  - hh_f07
+  - hh_f08
+  - hh_f09
+  - hh_f11
+  - hh_f12
+  - hh_head_labor_type
+  - region
+  - reside
+  - hh_head_has_cellphone
+  - hh_head_education
+  - hh_head_sex
+  - hh_t01
+  - hh_t02
+  - hh_t03
+  - hh_t04
+  - reside
+  - region
+
+keep_cols:
+  HH_MOD_B.dta:
+    - case_id
+    - hhid
+    - pid
+    - hh_b03
+    - hh_b04
+    - hh_b04a
+    - hh_b05a
+    - hh_b21  
+  Hh_MOD_E.dta:
+    - case_id
+    - hhid
+    - ea_id
+    - region
+    - reside
+    - hh_wgt
+    - hhsize
+  hh_mod_a_filt.dta:
+    - case_id
+    - hhid
+    - region
+    - reside
+    - hh_wgt
+    - hhsize
+  HH_MOD_F.dta:
+    - case_id
+    - hhid
+    - hh_f01
+    - hh_f03a
+    - hh_f05
+    - hh_f07
+    - hh_f08
+    - hh_f09
+    - hh_f10
+    - hh_f11
+    - hh_f12
+    - hh_f19
+    - hh_f36
+    - hh_f41
+    - hh_f41_4
+    - hh_f43
+  ihs5_consumption_aggregate.dta:
+    - case_id
+    - hhid
+    - region
+    - hhsize
+    - hh_wgt
+    - rexpagg
+  HH_MOD_L.dta:
+    - case_id
+    - hhid
+    - hh_l01
+    - hh_l02
+    - hh_l03
+    - hh_l04
+    - hh_l05
+    - hh_l06
+    - hh_l07
+  HH_MOD_M.dta:
+    - case_id
+    - hhid
+    - hh_m00
+    - hh_m0b
+    - hh_m0b_oth
+    - hh_m0c
+    - hh_m01
+    - hh_m02
+    - hh_m03
+    - hh_m04
+    - hh_m05
+    - hh_m06
+    - hh_m08
+    - hh_m09
+    - hh_m10
+    - hh_m11
+    - hh_m12
+    - hh_m13
+    - hh_m14
+  HH_MOD_H.dta:
+    - case_id
+    - hhid
+    - hh_h01
+    - hh_h02a
+    - hh_h02b
+    - hh_h02c
+    - hh_h02d
+    - hh_h02e
+    - hh_h03a
+    - hh_h03b
+    - hh_h03c
+    - hh_h04
+    # - hh_h05a
+    # - hh_h05b
+    # - hh_h05c
+    # - hh_h05d
+    # - hh_h05e
+    # - hh_h05f
+    # - hh_h05g
+    # - hh_h05h
+    # - hh_h05i
+    # - hh_h05j
+    # - hh_h05k
+    # - hh_h05l
+    # - hh_h05m
+    # - hh_h05n
+    # - hh_h05o
+    # - hh_h05p
+    # - hh_h05q
+    # - hh_h05r
+    # - hh_h05s
+    # - hh_h05t
+    # - hh_h05u
+    # - hh_h05v
+    # - hh_h05w
+    # - hh_h05x
+    # - hh_h05y
+  HH_MOD_T.dta:
+    - case_id
+    - hhid
+    - hh_t01
+    - hh_t02
+    - hh_t03
+    - hh_t04
+    - hh_t05
+    - hh_t06
+  HH_MOD_U.dta:
+    - case_id
+    - hhid
+    - hh_u0a
+    - hh_u02
+    - hh_u01_1
+
+
+roster_file: 'HH_MOD_B.dta'
+
+ADULT_MIN_AGE: 18
+currency_conversion_factor: 0.003361742723912196
+
+to_log_transform: 
+  - outcome
+
+random_state: 94704
+
+NUM_STDS: 10
+NUM_STDS_LOG_TRANSFORMED: 5
+winsorize: False
+
+outcome_column: rexpagg

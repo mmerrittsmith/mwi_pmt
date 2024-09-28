@@ -1,0 +1,56 @@
+num_bootstraps: 100
+train_test_split_ratios:
+  train: 0.75
+  test: 0.25
+n_cpus: 1
+niceness: 3
+random_state: 94704
+
+common_n_estimators: &common_n_estimators
+  - 50
+  - 100
+
+common_depths: &common_depths
+  - 2
+  - 4
+  - 8
+
+target_col: &target_col "outcome"
+weight_col: &weight_col "hh_wgt"
+id_col: &id_col "case_id"
+urban_or_rural: "rural_only"
+
+extras:
+  - *target_col
+  - *weight_col
+  - *id_col
+  - hhid
+  - pid
+
+# If running Stepwise, set n_cpus to 1
+# I don't know why, but I think something inside the Stepwise function is causing issues with parallelization
+# It seems like if I set n_cpus to 1, then 24 get used, which is about half of the cores on pedri
+# As such, best to run Stepwise and the rest separately
+models_to_run:
+  - Stepwise
+#  - Ridge
+#  - RandomForest
+#  - GradientBoosting
+
+  
+
+grid_search_params:
+  rf:
+    n_estimators: *common_n_estimators
+    max_depth: *common_depths
+  gb:
+    n_estimators: *common_n_estimators
+    max_depth: *common_depths
+    min_samples_leaf:
+      - 1
+      - 5
+      - 10
+    learning_rate:
+      - 0.1
+      - 0.5
+      - 1.0
