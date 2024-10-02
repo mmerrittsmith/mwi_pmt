@@ -4,6 +4,7 @@ train_test_split_ratios:
   test: 0.25
 n_cpus: 1
 niceness: 3
+n_folds: 15
 random_state: 94704
 
 common_n_estimators: &common_n_estimators
@@ -32,10 +33,11 @@ extras:
 # It seems like if I set n_cpus to 1, then 24 get used, which is about half of the cores on pedri
 # As such, best to run Stepwise and the rest separately
 models_to_run:
+  # - Ridge
+  # - RandomForest
+  # - GradientBoosting
   - Stepwise
-#  - Ridge
-#  - RandomForest
-#  - GradientBoosting
+
 
   
 

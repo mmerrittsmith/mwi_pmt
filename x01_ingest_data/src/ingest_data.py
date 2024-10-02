@@ -9,14 +9,52 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn import decomposition as sklearn_decomposition
 
-#TODO: Featurize shocks more fully to match the survey instrument. 
-
-
 def main(config: dict[str, typing.Any]) -> None:
+    """
+    Main function to orchestrate the data ingestion and preprocessing pipeline.
+
+    This function performs the following steps:
+    1. Loads and merges data from multiple files
+    2. Cleans and preprocesses the merged data
+    3. Removes outliers
+    4. Generates summary statistics for the entire dataset, urban subset, and rural subset
+    5. Saves the processed data and summaries to output files
+
+    Parameters:
+    -----------
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters for the data ingestion process.
+        Expected keys include:
+        - 'files_to_use': list of input data files
+        - 'keep_cols': dict specifying columns to keep from each file
+        - 'roster_file': filename for the roster data
+        - Other configuration parameters used in helper functions
+
+    Returns:
+    --------
+    None
+        This function doesn't return any value but generates output files.
+
+    Side Effects:
+    -------------
+    - Reads data from input files specified in the config
+    - Writes processed data to 'output/merged_data.parquet'
+    - Writes summary statistics to:
+        - 'output/post_encoding_summary.csv'
+        - 'output/post_encoding_summary_urban.csv'
+        - 'output/post_encoding_summary_rural.csv'
+
+    Notes:
+    ------
+    The function relies on several helper functions (create_full_df, add_roster, 
+    clean_full_data, remove_outliers, make_post_encoding_summary) to perform 
+    specific tasks in the data processing pipeline.
+    """
     data_dir = Path.cwd() / 'input'
     config["covariate_labels_to_descriptions"] = {}
     config["covariate_labels_to_modules"] = {}
     df, meta = pyreadstat.read_dta(data_dir / config['files_to_use'][0])
+    df = df.replace(999, np.nan)
     df.columns = df.columns.str.lower()
     df = df[config['keep_cols']['hh_mod_a_filt.dta']]
     for covariate_label in meta.column_names_to_labels.keys():
@@ -34,6 +72,43 @@ def main(config: dict[str, typing.Any]) -> None:
     df.to_parquet('output/merged_data.parquet', index=False)
 
 def make_post_encoding_summary(df: pd.DataFrame, config: dict[str, typing.Any], missing_pcts: pd.Series) -> pd.DataFrame:
+    """
+    Create a summary of post-encoding data statistics.
+
+    This function calculates various statistics for each variable in the DataFrame,
+    including weighted mean, weighted standard deviation, and missing fraction
+    before imputation or dummy encoding.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The input DataFrame containing the processed data.
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters. Not used in this function
+        but included for consistency with other functions in the pipeline.
+    missing_pcts : pd.Series
+        A Series containing the percentage of missing values for each variable
+        before any imputation or encoding.
+
+    Returns:
+    --------
+    pd.DataFrame
+        A DataFrame with the following columns:
+        - 'covariate': The name of the variable.
+        - 'mean': The weighted mean of the variable (or mode for non-numeric variables).
+        - 'std': The weighted standard deviation of the variable (0 for non-numeric variables).
+        - 'Missing Fraction before Imputation/Dummying': The fraction of missing values
+          before any imputation or dummy encoding.
+
+    Notes:
+    ------
+    - For numeric variables, the function calculates weighted mean and standard deviation
+      using the 'hh_wgt' column as weights.
+    - For non-numeric variables, the mode is used as the central tendency measure,
+      and the standard deviation is set to 0.
+    - The missing fraction is obtained from the input missing_pcts Series. If a variable
+      is not found in missing_pcts, its missing fraction is set to 0.
+    """
     stats = []
     for var in df.columns.tolist():
         if pd.api.types.is_numeric_dtype(df[var]):
@@ -136,15 +211,68 @@ def remove_outliers(df: pd.DataFrame, config: dict[str, typing.Any], summary: pd
     # Manually dropping the household with 500 chairs and 50 tables
     # AKA Bobby Tables
     df = df.drop(index=[5594])
+    # The first one of these reports excessive amounts of assets across the board,
+    # including a laughably high amount of durable assets and rent they could claim for their house.
+    # The second one is also an anomaly insofar as it has an extremeley high amount of durable assets and consumption, but the numbers
+    # seem less exaggerrated. 
+    df = df[~df["case_id"].isin(["210334510265"])]# ,  "107362180147"])]
 
     print(f"After dropping outliers, {len(df)} households of the original {original_num_households} remain.")
     return df, summary
 
 
 def clean_full_data(df: pd.DataFrame, config: dict[str, typing.Any]) -> pd.DataFrame:
+    """
+    Clean and preprocess the full dataset.
+
+    This function performs several data cleaning and preprocessing steps on the input DataFrame:
+    1. Drops columns with all missing values.
+    2. Drops columns with all zero values.
+    3. Removes rows with missing values in the outcome column.
+    4. Drops specific columns (shock-related and agricultural asset-related).
+    5. Removes columns with too many categories for one-hot encoding.
+    6. Calculates the daily per capita outcome variable.
+    7. Separates reserved columns from columns to be processed.
+    8. Coerces columns to numeric where possible.
+    9. Converts known categorical columns to string type.
+    10. Creates a summary of the data before encoding.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The input DataFrame containing the full dataset.
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters, including:
+        - 'outcome_column': str, the name of the outcome variable column
+        - 'currency_conversion_factor': float, factor to convert currency
+        - 'known_categorical_columns': list[str], columns known to be categorical
+        - 'covariate_labels_to_descriptions': dict[str, str], mapping of column names to descriptions
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, pd.DataFrame, pd.Series]
+        A tuple containing:
+        1. The cleaned and preprocessed DataFrame
+        2. A summary DataFrame of the data before encoding
+        3. A Series containing the percentage of missing values for each column
+
+    Side Effects:
+    -------------
+    - Writes a CSV file 'output/pre_encoding_summary.csv' with the pre-encoding summary.
+
+    Notes:
+    ------
+    This function modifies the input DataFrame in-place and returns a new DataFrame
+    with the processed data.
+    """
     df = df.dropna(axis=1, how='all')
     df = df.drop(columns=df.columns[df.eq(0).all()].tolist())
     df = df.dropna(subset=[config['outcome_column']])
+    # Dropping these based on Emily's suggestion
+    df = df.drop(columns=[c for c in df.columns if c.startswith("shock") or c.startswith("ag_asset")])
+    df = df.replace(999., np.nan)
+    df = df.replace(99., np.nan)
+
 
     # columns_to_drop = config['cols_to_drop']
     columns_to_drop = ['adult']
@@ -175,11 +303,52 @@ def clean_full_data(df: pd.DataFrame, config: dict[str, typing.Any]) -> pd.DataF
         df_to_process[c] = df_to_process[c].astype(str)
 
     summary, df, missing_pcts = make_pre_encoding_summary(df_to_process, df_reserved, config["covariate_labels_to_descriptions"])
+
+    # This block removes specific values that are clearly errors manually
+    # This response has their house being 2011 years old, I am assuming they mean to say it was built in 2011.
+    df.loc[df.case_id == "308066600276", 'hh_f05'] = 8.
     summary.to_csv("output/pre_encoding_summary.csv", index=False)
     return df, summary, missing_pcts
     
 
 def make_pre_encoding_summary(df: pd.DataFrame, df_reserved: pd.DataFrame, covariate_labels_to_descriptions: dict[str, str]) -> pd.DataFrame:
+    """
+    Create a summary of pre-encoding data statistics.
+
+    This function calculates various statistics for each variable in the DataFrame,
+    including missing counts, means, standard deviations, and missing percentages.
+    It also interprets column names and adds descriptions and module information.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The input DataFrame containing the data to be summarized.
+    df_reserved : pd.DataFrame
+        A DataFrame containing reserved columns, including weights.
+    covariate_labels_to_descriptions : dict[str, str]
+        A dictionary mapping covariate labels to their descriptions.
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, pd.DataFrame, pd.Series]
+        A tuple containing:
+        1. summary : pd.DataFrame
+           A DataFrame with summary statistics for each variable.
+        2. df : pd.DataFrame
+           The input DataFrame, potentially modified during the summary process.
+        3. missing_pcts : pd.Series
+           A Series containing the percentage of missing values for each variable.
+
+    Notes:
+    ------
+    - The function calculates both unweighted and weighted statistics.
+    - It handles both numeric and non-numeric columns differently.
+    - The resulting summary includes information such as missing counts, means,
+      standard deviations, medians, and variable types (numeric or categorical).
+    - The function relies on global config variables for some operations.
+    - This summary output isn't used in the final analysis, but it's useful for debugging.
+    """
+
     # Compile column summary (before imputing and one-hot encoding)
     missing_counts = df.isnull().sum() + (df == "").sum()  
     means = df.mean(skipna=True, numeric_only=True)
@@ -224,7 +393,32 @@ def make_pre_encoding_summary(df: pd.DataFrame, df_reserved: pd.DataFrame, covar
     df_non_numeric = df.select_dtypes(exclude=[np.number, np.datetime64])
     
     def get_covariate_type(cov):
-        
+        """
+        Determine the type of a covariate (numeric or categorical).
+
+        This function checks whether a given covariate is numeric or categorical
+        based on its presence in the numeric or non-numeric DataFrames.
+
+        Parameters:
+        -----------
+        cov : str
+            The name of the covariate to check.
+
+        Returns:
+        --------
+        str
+            'numeric' if the covariate is in the numeric DataFrame,
+            'categorical' if it's in the non-numeric DataFrame,
+            or None if it's not found in either.
+
+        Notes:
+        ------
+        - This function assumes the existence of two global DataFrames:
+          df_numeric and df_non_numeric, which contain the numeric and
+          non-numeric columns of the original dataset, respectively.
+        - If a covariate is not found in either DataFrame, the function
+          will implicitly return None.
+        """
         if cov in df_numeric.columns:
             return 'numeric'
         elif cov in df_non_numeric.columns:
@@ -297,10 +491,44 @@ def make_pre_encoding_summary(df: pd.DataFrame, df_reserved: pd.DataFrame, covar
                           'hh_f43', 'hh_h01', 'hh_h04', 'hh_head_education',
                           'hh_head_has_cellphone', 'hh_head_labor_type',
                           'hh_head_sex', 'hh_t01', 'hh_t02', 'hh_t03', 'hh_t04', 
-                          'region', 'reside'])
+                          'region', 'reside', 'rexpagg', 'hh_e06_8a'])
     return summary, df, missing_pcts
 
 def handle_shocks(shocks: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle shock data by pivoting and preprocessing.
+
+    This function takes a DataFrame of shock data and transforms it into a format
+    suitable for further analysis. It performs the following operations:
+    1. Pivots the shock data to create binary indicators for each shock type.
+    2. Filters out shock types that have no occurrences.
+    3. Creates a dictionary mapping shock covariates to their descriptions.
+
+    Parameters:
+    -----------
+    shocks : pd.DataFrame
+        A DataFrame containing shock data. Expected to have columns:
+        - 'case_id': Identifier for each household
+        - 'hh_u0a': Type of shock experienced
+        - 'hh_u01_1': Indicator of shock occurrence (assumed to be binary or count)
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, dict[str, str]]
+        A tuple containing:
+        1. pd.DataFrame: Pivoted shock data with binary indicators for each shock type.
+           Columns are prefixed with 'shock_'.
+        2. dict[str, str]: A dictionary mapping shock covariate names to their descriptions.
+
+    Notes:
+    ------
+    - The function assumes that 'hh_u01_1' represents the occurrence of a shock,
+      and sums these values in case of multiple entries per household and shock type.
+    - Shock types with no occurrences across all households are removed from the output.
+    - The resulting DataFrame will have 'case_id' as the index and shock types as columns.
+    - The shock variables aren't currently used in the analysis.
+    """
+
     shocks_pivoted = shocks.pivot_table(
         index='case_id',
         columns='hh_u0a',
@@ -318,6 +546,40 @@ def handle_shocks(shocks: pd.DataFrame) -> pd.DataFrame:
     return shocks_pivoted, shocks_covariate_to_desciption
 
 def handle_durable_goods(durable_goods: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle durable goods data by pivoting and preprocessing.
+
+    This function takes a DataFrame of durable goods data and transforms it into a format
+    suitable for further analysis. It performs the following operations:
+    1. Pivots the durable goods data to create count indicators for each durable good type.
+    2. Filters out durable good types that have no occurrences across all households.
+    3. Creates a dictionary mapping durable good covariates to their descriptions.
+
+    Parameters:
+    -----------
+    durable_goods : pd.DataFrame
+        A DataFrame containing durable goods data. Expected to have columns:
+        - 'case_id': Identifier for each household
+        - 'hh_l02': Type of durable good
+        - 'hh_l03': Count or indicator of durable good ownership
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, dict[str, str]]
+        A tuple containing:
+        1. pd.DataFrame: Pivoted durable goods data with count indicators for each good type.
+           Columns are prefixed with 'durable_asset_'.
+        2. dict[str, str]: A dictionary mapping durable good covariate names to their descriptions.
+
+    Notes:
+    ------
+    - The function assumes that 'hh_l03' represents the count or ownership of a durable good,
+      and sums these values in case of multiple entries per household and good type.
+    - Durable good types with no occurrences across all households are removed from the output.
+    - The resulting DataFrame will have 'case_id' as the index and durable good types as columns.
+    - The descriptions in the returned dictionary describe the count or ownership of each good.
+    """
+
     durable_goods_pivoted = durable_goods.pivot_table(
         index='case_id',
         columns='hh_l02',
@@ -335,6 +597,44 @@ def handle_durable_goods(durable_goods: pd.DataFrame) -> pd.DataFrame:
     return durable_goods_pivoted, durable_goods_covariate_to_desciption
 
 def handle_ag_goods(ag_goods: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle agricultural goods data by pivoting and preprocessing.
+
+    This function takes a DataFrame of agricultural goods data and transforms it into a format
+    suitable for further analysis. It performs the following operations:
+    1. Converts the 'hh_m0b' column to string type.
+    2. Replaces 'OTHER' values in 'hh_m0b' with their corresponding descriptions from 'hh_m0b_oth'.
+    3. Pivots the agricultural goods data to create count indicators for each good type.
+    4. Filters out agricultural good types that have no occurrences across all households.
+    5. Creates a dictionary mapping agricultural good covariates to their descriptions.
+
+    Parameters:
+    -----------
+    ag_goods : pd.DataFrame
+        A DataFrame containing agricultural goods data. Expected to have columns:
+        - 'case_id': Identifier for each household
+        - 'hh_m0b': Type of agricultural good
+        - 'hh_m01': Count or indicator of agricultural good ownership
+        - 'hh_m0b_oth': Description for 'OTHER' agricultural goods
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, dict[str, str]]
+        A tuple containing:
+        1. pd.DataFrame: Pivoted agricultural goods data with count indicators for each good type.
+           Columns are prefixed with 'ag_asset_'.
+        2. dict[str, str]: A dictionary mapping agricultural good covariate names to their descriptions.
+
+    Notes:
+    ------
+    - The function assumes that 'hh_m01' represents the count or ownership of an agricultural good,
+      and sums these values in case of multiple entries per household and good type.
+    - Agricultural good types with no occurrences across all households are removed from the output.
+    - The resulting DataFrame will have 'case_id' as the index and agricultural good types as columns.
+    - The descriptions in the returned dictionary describe the count or ownership of each good.
+    - The ag_goods variables aren't being used in the PMT model, so we can ignore them for now.
+    """
+
     ag_goods.hh_m0b = ag_goods.hh_m0b.astype(str)
 
     ag_goods.loc[ag_goods.hh_m0b == 'OTHER', 'hh_m0b'] = ag_goods[ag_goods.hh_m0b == 'OTHER']['hh_m0b_oth']
@@ -356,11 +656,77 @@ def handle_ag_goods(ag_goods: pd.DataFrame) -> pd.DataFrame:
     return ag_goods_pivoted, ag_goods_covariate_to_description
 
 def handle_land_ownership(land_ownership_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Process land ownership data from the input DataFrame.
+
+    This function takes a DataFrame containing land ownership information and processes it
+    to create a simplified representation of land ownership per household.
+
+    Parameters:
+    -----------
+    land_ownership_df : pd.DataFrame
+        A DataFrame containing land ownership data. Expected to have columns:
+        - 'hhid': Household identifier
+        - Other columns related to land ownership (not directly used in this function)
+
+    Returns:
+    --------
+    pd.DataFrame
+        A DataFrame with two columns:
+        - 'hhid': Household identifier
+        - 'land_ownership': Count of land parcels owned by the household
+
+    Notes:
+    ------
+    - The function creates a 'land_ownership' column with a value of 1 for each row,
+      effectively counting each land parcel.
+    - It then groups the data by 'hhid' and counts the number of land parcels per household.
+    - The resulting DataFrame represents the total number of land parcels owned by each household.
+    - The data that results from this function is not being used in the PMT model, so we can ignore it for now.
+    """
     land_ownership_df['land_ownership'] = 1
     land_ownership_df = land_ownership_df[['hhid', 'land_ownership']].groupby('hhid')[["land_ownership"]].count().rename(columns={'land_ownership': 'land_ownership'})
     return land_ownership_df
 
 def create_full_df(df: pd.DataFrame, config: dict[str, typing.Any], covariate_labels_to_modules: dict[str, str]) -> pd.DataFrame:
+    """
+    Create a full DataFrame by merging multiple data files and processing specific modules.
+
+    This function reads multiple data files specified in the config, processes them according
+    to their content, and merges them with the main DataFrame. It also handles special cases
+    for certain modules like durable goods, agricultural goods, and shocks.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The initial DataFrame to which other data will be merged.
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters, including:
+        - 'files_to_use': list of data files to process
+        - 'keep_cols': dict specifying columns to keep from each file
+    covariate_labels_to_modules : dict[str, str]
+        A dictionary mapping covariate labels to their respective modules.
+
+    Returns:
+    --------
+    tuple[pd.DataFrame, dict[str, str]]
+        A tuple containing:
+        1. The merged and processed DataFrame
+        2. An updated covariate_labels_to_modules dictionary
+
+    Side Effects:
+    -------------
+    - Reads multiple .dta files from the 'input' directory
+    - Prints progress messages to the console
+
+    Notes:
+    ------
+    - Special processing is applied to 'HH_MOD_L.dta' (durable goods), 'HH_MOD_M.dta' 
+      (agricultural goods), and 'HH_MOD_U.dta' (shocks).
+    - The function uses pyreadstat to read .dta files and applies specific handling 
+      functions for certain modules.
+    - Column names are converted to lowercase for consistency.
+    """
     extra_modules = {}
     data_dir = Path.cwd() / 'input'
     for file in config['files_to_use'][1:]:
@@ -377,8 +743,6 @@ def create_full_df(df: pd.DataFrame, config: dict[str, typing.Any], covariate_la
             case 'HH_MOD_M.dta':
                 df_temp, ag_goods_covariate_to_desciption = handle_ag_goods(df_temp)
                 extra_modules['HH_MOD_M_ag_goods'] = ag_goods_covariate_to_desciption
-            case "HH_MOD_F1.dta":
-                df_temp = handle_land_ownership(df_temp)
             case 'HH_MOD_U.dta':
                 df_temp, shocks_covariate_to_desciption = handle_shocks(df_temp)
                 extra_modules['HH_MOD_U_shocks'] = shocks_covariate_to_desciption
@@ -391,6 +755,50 @@ def create_full_df(df: pd.DataFrame, config: dict[str, typing.Any], covariate_la
     return df, covariate_labels_to_modules
 
 def add_roster(df: pd.DataFrame, roster_path: Path, config: dict[str, typing.Any]) -> pd.DataFrame:
+    """
+    Add roster information to the main DataFrame.
+
+    This function processes the roster data, merges it with individual labor data,
+    and calculates various household-level statistics. It then merges these
+    statistics with the main DataFrame.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The main DataFrame to which roster information will be added.
+    roster_path : Path
+        The file path to the roster data.
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters, including column names
+        to keep and the minimum age for an adult.
+
+    Returns:
+    --------
+    pd.DataFrame
+        The input DataFrame with additional columns derived from the roster data,
+        including:
+        - num_adults: Number of adults in the household
+        - num_children: Number of children in the household
+        - num_phones: Number of phones in the household
+        - hh_head_labor_type: Labor type of the household head
+        - hh_head_age: Age of the household head
+        - hh_head_sex: Sex of the household head
+        - hh_head_education: Education level of the household head
+        - hh_head_has_cellphone: Whether the household head has a cellphone
+
+    Side Effects:
+    -------------
+    - Reads the roster data file and the individual labor data file
+    - Prints progress messages to the console (implicitly through called functions)
+
+    Notes:
+    ------
+    - The function assumes the existence of a 'clean_roster' function and a 'merge_dfs' function
+    - It uses 'case_id' as the primary key for merging DataFrames
+    - The function handles missing values for 'num_adults' and 'num_children' by filling with 0
+    - An assertion is made to ensure that every household has at least one member
+    """
+
     roster, meta = pyreadstat.read_dta(roster_path)
     roster = clean_roster(roster, config)
     individual_labor_df, meta = pyreadstat.read_dta('input/HH_MOD_E.dta')
@@ -435,12 +843,74 @@ def add_roster(df: pd.DataFrame, roster_path: Path, config: dict[str, typing.Any
     return df
 
 def clean_roster(roster: pd.DataFrame, config: dict[str, typing.Any]) -> pd.DataFrame:
+    """
+    Clean and preprocess the roster data.
+
+    This function performs the following operations on the roster DataFrame:
+    1. Converts all column names to lowercase.
+    2. Filters the DataFrame to keep only the columns specified in the configuration.
+    3. Creates a new 'adult' column based on the age threshold defined in the configuration.
+
+    Parameters:
+    -----------
+    roster : pd.DataFrame
+        The input roster DataFrame containing household member information.
+    config : dict[str, typing.Any]
+        A dictionary containing configuration parameters, including:
+        - 'keep_cols': dict with 'HH_MOD_B.dta' key specifying columns to keep
+        - 'ADULT_MIN_AGE': int, the minimum age to be considered an adult
+
+    Returns:
+    --------
+    pd.DataFrame
+        The cleaned and preprocessed roster DataFrame with the following modifications:
+        - All column names in lowercase
+        - Only specified columns retained
+        - New 'adult' column added based on the age threshold
+
+    Notes:
+    ------
+    - The function assumes that 'hh_b05a' column represents the age of household members.
+    - The 'adult' column is a boolean indicator where True means the member is an adult.
+    """
+
     roster.columns = [c.lower() for c in roster.columns]
     roster = roster[config['keep_cols']['HH_MOD_B.dta']]
     roster['adult'] = roster.hh_b05a >= config['ADULT_MIN_AGE']
     return roster
 
 def columns_equal(df: pd.DataFrame, col1: str, col2: str) -> bool:
+    """
+    Check if two columns in a DataFrame are equal.
+
+    This function compares two columns in a DataFrame for equality. It handles
+    both numeric and non-numeric data types, and accounts for potential
+    floating-point precision issues in numeric comparisons.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The DataFrame containing the columns to be compared.
+    col1 : str
+        The name of the first column to compare.
+    col2 : str
+        The name of the second column to compare.
+
+    Returns:
+    --------
+    bool
+        True if the columns are equal (within tolerance for numeric data),
+        False otherwise.
+
+    Notes:
+    ------
+    - For numeric columns, the function uses numpy's isclose() function with
+      a relative tolerance of 1e-4 to account for floating-point precision.
+    - For non-numeric columns, it uses a direct equality comparison.
+    - If the columns have mismatched categories (e.g., one is numeric and
+      the other is categorical), the function returns False.
+    """
+
     c1 = df[col1]
     c2 = df[col2]
 
@@ -455,6 +925,37 @@ def columns_equal(df: pd.DataFrame, col1: str, col2: str) -> bool:
         return eq
 
 def merge_dfs(df: pd.DataFrame, df_temp: pd.DataFrame, file_name: str, on='case_id') -> pd.DataFrame:
+    """
+    Merge two DataFrames and handle column conflicts.
+
+    This function merges two DataFrames and resolves conflicts between columns
+    with the same base name but different suffixes ('_left' and '_right').
+    It also handles special cases for geographic columns.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        The main DataFrame to merge into.
+    df_temp : pd.DataFrame
+        The DataFrame to merge from.
+    file_name : str
+        The name of the file being merged, used for error reporting.
+    on : str, optional
+        The column to merge on. Default is 'case_id'.
+
+    Returns:
+    --------
+    pd.DataFrame
+        The merged DataFrame with resolved column conflicts.
+
+    Notes:
+    ------
+    - Columns ending with '_left' and '_right' are compared for equality.
+    - If equal, the '_right' column is dropped and '_left' is renamed.
+    - For 'region' and 'district' columns, string values are preferred over numeric.
+    - Mismatched columns are reported and the '_left' version is kept by default.
+    """
+
     df = df.merge(df_temp, on=on, how='outer', suffixes=('_left', '_right'))
     for c in df.columns:
         if c.endswith('_left'):
@@ -490,6 +991,32 @@ def merge_dfs(df: pd.DataFrame, df_temp: pd.DataFrame, file_name: str, on='case_
     return df
 
 def load_config() -> dict[str, typing.Any]:
+    """
+    Load the configuration from a YAML file.
+
+    This function reads the configuration settings from a YAML file
+    located at 'config/config.yaml'.
+
+    Returns:
+    --------
+    dict[str, typing.Any]
+        A dictionary containing the configuration settings.
+        The keys are strings representing setting names, and the values
+        can be of any type, depending on the configuration.
+
+    Raises:
+    -------
+    FileNotFoundError
+        If the 'config/config.yaml' file is not found.
+    yaml.YAMLError
+        If there's an error parsing the YAML file.
+
+    Notes:
+    ------
+    - The function assumes that the YAML file is properly formatted.
+    - It's recommended to use this function at the start of the script
+      to ensure all necessary configurations are loaded before processing.
+    """
     with open('config/config.yaml', 'r') as file:
         config = yaml.safe_load(file)
     return config

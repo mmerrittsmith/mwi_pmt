@@ -27,6 +27,7 @@ known_categorical_columns:
   - hh_t04
   - reside
   - region
+  - hh_e06_8a
 
 keep_cols:
   HH_MOD_B.dta:
@@ -57,7 +58,6 @@ keep_cols:
     - case_id
     - hhid
     - hh_f01
-    - hh_f03a
     - hh_f05
     - hh_f07
     - hh_f08
@@ -66,6 +66,7 @@ keep_cols:
     - hh_f11
     - hh_f12
     - hh_f19
+    - hh_f34
     - hh_f36
     - hh_f41
     - hh_f41_4
