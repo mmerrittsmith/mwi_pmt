@@ -14,10 +14,10 @@ from sklearn.preprocessing import FunctionTransformer
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import Ridge, Lasso
-from sklearn.metrics import r2_score, recall_score, mean_squared_error
+from sklearn.metrics import r2_score, mean_squared_error
 from sklearn.model_selection import KFold, GridSearchCV
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.base import BaseEstimator
+from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.linear_model import LassoCV
 
 
@@ -25,6 +25,24 @@ from sklearn.linear_model import LassoCV
 from scipy.stats import spearmanr, pearsonr
 import joblib
 import statsmodels.api as sm
+
+
+class StatsmodelsWrapper(BaseEstimator, RegressorMixin):
+    def __init__(self):
+        pass
+
+    def fit(self, X, y, sample_weight=None):
+        # X = sm.add_constant(X)
+        try:
+            self.model_ = sm.WLS(y, sm.add_constant(X), weights=sample_weight).fit()
+        except:
+            X.to_csv('temp.csv')
+            sys.exit()
+        return self
+
+    def predict(self, X):
+        # X = sm.add_constant(X)
+        return self.model_.predict(X)
 
 def min_max_normalize(X: np.ndarray) -> np.ndarray:
     """
@@ -69,47 +87,6 @@ def load_config() -> dict[str, typing.Any]:
         config = yaml.safe_load(file)
     return config
 
-def ee_rate(eligible, chosen):
-    """
-    Exclusion error rate, aka undercoverage or false negative rate, is the proportion of the eligible who are 
-    wrongly excluded.
-    EER = FN / (FN + TP)
-    This measure is equivalent to the Targeting Error Rate, as we fix the number of beneficiaries to the target 
-    coverage.
-    The function spells the operations to mirror the other metrics, but can be rolled into:
-    np.sum(np.logical_and(y_test_binary, 1-np.array(yhat_test_binary))) / np.sum(y_test_binary)
-    
-    Parameters:
-    eligible (0/1 int tuple): 1 households whose true consumption is below the threshold
-    chosen  (0/1 int tuple): 1 for households whose estimated consumption is below the threshold
-    
-    Returns:
-    eer (float): Exclusion error rate
-    """
-    not_chosen = 1 - np.array(chosen)
-    wrongly_excluded = np.logical_and(eligible, not_chosen)
-    eer = np.sum(wrongly_excluded) / np.sum(eligible)
-    return eer
-
-def ie_rate(eligible, chosen):
-    """
-    Inclusion error rate, or false positive rate, is the proportion of the non-eligible who are wrongly included.
-    IER = FP / (FP + TN)
-    This definition differs from the IER definition [FP / (FP + TP)], or leakage, that is standard in social 
-    protection.
-    
-    Parameters:
-    eligible (0/1 int tuple): 1 households whose true consumption is below the threshold
-    chosen  (0/1 int tuple): 1 for households whose estimated consumption is below the threshold
-    
-    Returns:
-    ier (float): Inclusion error rate
-    """
-    ineligible = 1 - np.array(eligible)
-    wrongly_included = np.logical_and(ineligible, chosen)
-    ier = np.sum(wrongly_included) / np.sum(ineligible)
-    return ier
-
 def fi_getter(fitted_model: typing.Any) -> np.ndarray:
     """
     Get the feature importances from a fitted model, regardless of the model type.
@@ -120,8 +97,8 @@ def fi_getter(fitted_model: typing.Any) -> np.ndarray:
     Returns:
     np.ndarray: Feature importances.
     """
-    if isinstance(fitted_model, sm.regression.linear_model.RegressionResultsWrapper):
-        return fitted_model.params
+    if isinstance(fitted_model, StatsmodelsWrapper):
+        return fitted_model.model_.params
     elif hasattr(fitted_model, 'coef_'):
         return fitted_model.coef_
     elif hasattr(fitted_model, 'feature_importances_'):
@@ -185,15 +162,26 @@ def forward_stepwise_arbitrary_model(X_train: pd.DataFrame,
     # X_test = X_test[var_list + ['const']]
 
     kfold = KFold(n_splits=config['n_folds'], shuffle=True, random_state=config['random_state'])
+    if isinstance(model, RandomForestRegressor):
+        kfold = GridSearchCV(cv=kfold, estimator=model, param_grid=config['grid_search_params']['rf'], n_jobs=config['n_cpus'], scoring='neg_mean_absolute_error')
+    elif isinstance(model, GradientBoostingRegressor):
+        kfold = GridSearchCV(cv=kfold, estimator=model, param_grid=config['grid_search_params']['gb'], n_jobs=config['n_cpus'], scoring='neg_mean_absolute_error')
+    elif isinstance(model, Lasso):
+        kfold = GridSearchCV(cv=kfold, estimator=model, param_grid={}, n_jobs=config['n_cpus'], scoring='neg_mean_squared_error')
+    
+
     remaining = list(X_train.columns)
     remaining.remove('const')
     selected, current_vars = ['const'], ['const']
     train_r2s, test_r2s, all_selected_vars, fis = {}, {}, {}, {}
 
     train_ids, val_ids = train_test_split(range(len(y_train)), random_state=config['random_state'], test_size=0.25)
+        
+
     if model is None:
-        model = sm.WLS(y_train.iloc[train_ids], sm.add_constant(X_train.iloc[train_ids][selected]), weights=weights_train.iloc[train_ids])
-        fitted_model = model.fit()
+        model = StatsmodelsWrapper()
+        kfold = GridSearchCV(cv=kfold, estimator=model, param_grid={}, n_jobs=config['n_cpus'], scoring='neg_mean_squared_error')
+        fitted_model = model.fit(X_train.iloc[train_ids][selected], y_train.iloc[train_ids], sample_weight=weights_train.iloc[train_ids])
     else:
         fitted_model = model.fit(X_train.iloc[train_ids][selected], y_train.iloc[train_ids], sample_weight=weights_train.iloc[train_ids])
     yhat_val = fitted_model.predict(X_train.iloc[val_ids][selected])
@@ -208,47 +196,47 @@ def forward_stepwise_arbitrary_model(X_train: pd.DataFrame,
     keep_going_anyway = True
     while len(remaining) > 0:
         best_mse_this_loop = np.inf
-        if len(selected) == 20:
+        best_r2_val_this_loop = -np.inf
+        best_r2_test_this_loop = -np.inf
+        if len(selected) == 21:
             keep_going_anyway = False
         for var in remaining:
             candidates = selected + [var]
-
             mse_candidate = np.zeros(config['n_folds'])
-            r2_val_candidates, r2_test_candidates, fis_candidate = [], [], []
-            for k, (train_ids, val_ids) in enumerate(kfold.split(range(len(X_train)))):
-                if isinstance(model, BaseEstimator):
-                    fitted_model = model.fit(X_train.iloc[train_ids][candidates], y_train.iloc[train_ids], sample_weight=weights_train.iloc[train_ids])
-                else:
-                    model = sm.WLS(y_train.iloc[train_ids], X_train.iloc[train_ids][candidates], 
-                                   weights=weights_train.iloc[train_ids])
-                    fitted_model = model.fit()
-                yhat_val = fitted_model.predict(X_train.iloc[val_ids][candidates])
-                r2_val_candidates.append(r2_score(y_train.iloc[val_ids], yhat_val))
-                yhat_test = fitted_model.predict(X_test[candidates])
-                r2_test_candidates.append(r2_score(y_test, yhat_test))
-                mse_candidate[k] = mean_squared_error(y_train.iloc[val_ids], yhat_val)
-                fis_candidate.append(fi_getter(fitted_model))
-            if np.mean(mse_candidate) < mse_current:
+            kfold.fit(X_train[candidates], y_train, sample_weight=weights_train)
+            model = kfold.best_estimator_ if hasattr(kfold, 'best_estimator_') else model
+            if isinstance(model, Lasso):
+                model.set_params(alpha=0.001)
+            fitted_model = model.fit(X_train.iloc[train_ids][candidates], y_train.iloc[train_ids], sample_weight=weights_train.iloc[train_ids])
+            yhat_test = fitted_model.predict(X_test[candidates])
+            yhat_val = fitted_model.predict(X_train.iloc[val_ids][candidates])
+            mse_candidate = mean_squared_error(y_train.iloc[val_ids], yhat_val)
+            if mse_candidate < mse_current:
                 current_vars = candidates
-                best_mse_this_loop = np.mean(mse_candidate)
-                mse_current = np.mean(mse_candidate)
-                current_best_r2_val = np.median(r2_val_candidates)
-                current_best_r2_test = np.median(r2_test_candidates)
-                current_fis = np.mean(fis_candidate, axis=0)
-                # print(f"Current best R2 val: {current_best_r2_val}")
-                # print(f"Current best R2 test: {current_best_r2_test}")
-                # print(f"Current variables: {current_vars}")
+                best_mse_this_loop = mse_candidate
+                mse_current = mse_candidate
+                current_best_r2_val = r2_score(y_train.iloc[val_ids], yhat_val)
+                current_best_r2_test = r2_score(y_test, yhat_test)
+                current_fis = fi_getter(fitted_model)
+                print(f"Current best R2 val: {current_best_r2_val}")
+                print(f"Current best R2 test: {current_best_r2_test}")
+                print(f"Current variables: {current_vars}")
             elif keep_going_anyway:
-                if np.mean(mse_candidate) < best_mse_this_loop:
+                if mse_candidate < best_mse_this_loop:
                     current_vars = candidates
-                    best_mse_this_loop = np.mean(mse_candidate)
-                    mse_current = np.mean(mse_candidate)
-                    current_best_r2_val = np.median(r2_val_candidates)
-                    current_best_r2_test = np.median(r2_test_candidates)
-                    current_fis = np.mean(fis_candidate, axis=0)
-                    # print(f"Not an improvement, but keep going anyway. Current best R2 val: {current_best_r2_val}")
-                    # print(f"Not an improvement, but keep going anyway. Current best R2 test: {current_best_r2_test}")
-                    # print(f"Not an improvement, but keep going anyway. Current variables: {current_vars}")
+                    best_mse_this_loop = mse_candidate
+                    mse_current = mse_candidate
+                    current_best_r2_val = r2_score(y_train.iloc[val_ids], yhat_val)
+                    current_best_r2_test = r2_score(y_test, yhat_test)
+                    current_fis = fi_getter(fitted_model)
+                    print(current_fis)
+                    print(f"Not an improvement, but keep going anyway. Current best R2 val: {current_best_r2_val}")
+                    print(f"Not an improvement, but keep going anyway. Current best R2 test: {current_best_r2_test}")
+                    print(f"Not an improvement, but keep going anyway. Current variables: {current_vars}")
+                else:
+                    print(f"Tried {candidates}. Got {mse_candidate}, and best is {best_mse_this_loop}")
+            else:
+                print(f"Tried {candidates}. Got {mse_candidate} and best is {best_mse_this_loop}")
         if current_vars == selected and not keep_going_anyway:
             break
         train_r2s[len(current_vars)] = current_best_r2_val
@@ -258,7 +246,10 @@ def forward_stepwise_arbitrary_model(X_train: pd.DataFrame,
         remaining.remove(current_vars[-1])
         selected = current_vars
         mse_best = mse_current.copy()
-    all_results = {'selected': selected, 'train_r2s': train_r2s, 'test_r2s': test_r2s, 'all_selected_vars': all_selected_vars, 'fis': fis}
+    try:
+        all_results = {'selected': selected, 'train_r2s': train_r2s, 'test_r2s': test_r2s, 'all_selected_vars': all_selected_vars, 'fis': fis, 'params': kfold.best_params_}
+    except:
+        all_results = {'selected': selected, 'train_r2s': train_r2s, 'test_r2s': test_r2s, 'all_selected_vars': all_selected_vars, 'fis': fis}
     return all_results
 
 
@@ -350,7 +341,7 @@ def run_single_bootstrap(df: pd.DataFrame, config: dict[str, typing.Any], model_
 
     match model_name:
         case 'Ridge':
-            model = Ridge(alpha=0.00464, fit_intercept=True, random_state=config['random_state'])
+            model = Ridge(fit_intercept=True, random_state=config['random_state'])
             all_results = forward_stepwise_arbitrary_model(X_train_transformed, y_train, weights_train, X_test_transformed, y_test, model, config)
             fitted_model = model.fit(X_train_transformed[all_results['selected']], y_train, sample_weight=weights_train)
             if config["evaluate_on_urban_only"]:
@@ -359,21 +350,7 @@ def run_single_bootstrap(df: pd.DataFrame, config: dict[str, typing.Any], model_
                 model_filename = f"output/{config['urban_or_rural']}/ridge.joblib"
             joblib.dump(fitted_model, model_filename)
         case 'Lasso':
-            # Why no alphas in LassoCV call here? https://github.com/emilylaiken/pmt-decay/blob/e655b9d0f66d145a1da0f2355fe79d8ea3ec6533/Machine%20Learning.ipynb#L212
-            # I don't know, but I'm following the example in the notebook
-            # model = LassoCV(fit_intercept=True, random_state=config['random_state'])
-            # Use LassoCV to find the optimal alpha
-            param_grid = {'alpha': np.logspace(-3, 3, 100)}
-            lasso_cv = GridSearchCV(
-                Lasso(random_state=config['random_state'], fit_intercept=True),
-                param_grid,
-                cv=10,
-                scoring='neg_mean_squared_error',
-                n_jobs=config['n_cpus']
-            )
-            lasso_cv.fit(X_train_transformed, y_train, sample_weight=weights_train)
-            model = Lasso(alpha=lasso_cv.best_params_['alpha'], fit_intercept=True, random_state=config['random_state'])
-            print(f"Optimal alpha: {lasso_cv.best_params_['alpha']}")
+            model = Lasso(alpha=0.001, fit_intercept=True, random_state=config['random_state'])
             all_results = forward_stepwise_arbitrary_model(X_train_transformed, y_train, weights_train, X_test_transformed, y_test, model, config)
             fitted_model = model.fit(X_train_transformed[all_results['selected']], y_train, sample_weight=weights_train)
             if config["evaluate_on_urban_only"]:
@@ -383,8 +360,7 @@ def run_single_bootstrap(df: pd.DataFrame, config: dict[str, typing.Any], model_
             joblib.dump(fitted_model, model_filename)
             
         case 'RandomForest':
-            # Using parameters found from previous grid search code
-            model = RandomForestRegressor(n_jobs=config['n_cpus'], n_estimators=50, max_depth=8, random_state=config['random_state'])
+            model = RandomForestRegressor(n_jobs=config['n_cpus'], random_state=config['random_state'])
             all_results = forward_stepwise_arbitrary_model(X_train_transformed, y_train, weights_train, X_test_transformed, y_test, model, config)
             fitted_model = model.fit(X_train_transformed[all_results['selected']], y_train, sample_weight=weights_train)
             if config["evaluate_on_urban_only"]:
@@ -393,8 +369,7 @@ def run_single_bootstrap(df: pd.DataFrame, config: dict[str, typing.Any], model_
                 model_filename = f"output/{config['urban_or_rural']}/random_forest.joblib"
             joblib.dump(fitted_model, model_filename)
         case 'GradientBoosting':
-            # Using parameters found from previous grid search code
-            model = GradientBoostingRegressor(learning_rate=0.1, n_estimators=100, max_depth=8, min_samples_leaf=1, random_state=config['random_state'])
+            model = GradientBoostingRegressor(random_state=config['random_state'])
             all_results = forward_stepwise_arbitrary_model(X_train_transformed, y_train, weights_train, X_test_transformed, y_test, model, config)
             fitted_model = model.fit(X_train_transformed[all_results['selected']], y_train, sample_weight=weights_train)
             if config["evaluate_on_urban_only"]:
@@ -487,15 +462,25 @@ def run_ml(df: pd.DataFrame, config: dict[str, typing.Any], model_name: str) -> 
     df[config['weight_col']] = df[config['weight_col']].apply(lambda x: int(x))
 
     all_results = run_single_bootstrap(df, config, model_name)
-
-    pd.DataFrame(all_results["metrics"]).to_csv(f"output/{config['urban_or_rural']}/metrics_{model_name}.csv")
     importances_df = fis_to_df(all_results['fis'])
     if config["evaluate_on_urban_only"]:
-        model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}_eval_on_urban.csv"
-        all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}_eval_on_urban.csv")
+        if config["use_expanded_data"]:
+            model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}_eval_on_urban_expanded.csv"
+            all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}_eval_on_urban_expanded.csv")
+            pd.DataFrame(all_results["metrics"]).to_csv(f"output/{config['urban_or_rural']}/metrics_{model_name}_eval_on_urban_expanded.csv")
+        else:
+            model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}_eval_on_urban.csv"
+            all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}_eval_on_urban.csv")
+            pd.DataFrame(all_results["metrics"]).to_csv(f"output/{config['urban_or_rural']}/metrics_{model_name}_eval_on_urban.csv")
     else:
-        model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}.csv"
-        all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}.csv")
+        if config["use_expanded_data"]:
+            model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}_expanded.csv"
+            all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}_expanded.csv")
+            pd.DataFrame(all_results["metrics"]).to_csv(f"output/{config['urban_or_rural']}/metrics_{model_name}_expanded.csv")
+        else:
+            model_filename = f"output/{config['urban_or_rural']}/importances_{model_name}.csv"
+            all_results["r2_df"].to_csv(f"output/{config['urban_or_rural']}/r2_{model_name}.csv")
+            pd.DataFrame(all_results["metrics"]).to_csv(f"output/{config['urban_or_rural']}/metrics_{model_name}.csv")
     importances_df = fis_to_df(all_results['fis'])
     importances_df.to_csv(model_filename)
 
@@ -562,7 +547,10 @@ def main(config: dict[str, typing.Any]):
     - Executes the specified machine learning models
     - Generates output files in the 'output/{urban_or_rural}/' directory
     """
-    df = pd.read_parquet("input/merged_data.parquet")
+    if config["use_expanded_data"]:
+        df = pd.read_parquet("input/merged_data_expanded.parquet")
+    else:
+        df = pd.read_parquet("input/merged_data.parquet")
     df.index = df[config['id_col']]
     df['const'] = 1
     if config['urban_or_rural'].startswith('urban'):

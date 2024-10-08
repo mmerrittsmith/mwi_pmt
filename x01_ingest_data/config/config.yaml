@@ -21,14 +21,14 @@ known_categorical_columns:
   - hh_head_has_cellphone
   - hh_head_education
   - hh_head_sex
-  - hh_t01
-  - hh_t02
-  - hh_t03
-  - hh_t04
+  # - hh_t01
+  # - hh_t02
+  # - hh_t03
+  # - hh_t04
   - reside
   - region
   - hh_e06_8a
-
+  - hh_c09
 keep_cols:
   HH_MOD_B.dta:
     - case_id
@@ -38,7 +38,6 @@ keep_cols:
     - hh_b04
     - hh_b04a
     - hh_b05a
-    - hh_b21  
   Hh_MOD_E.dta:
     - case_id
     - hhid
@@ -111,16 +110,16 @@ keep_cols:
   HH_MOD_H.dta:
     - case_id
     - hhid
-    - hh_h01
-    - hh_h02a
-    - hh_h02b
-    - hh_h02c
-    - hh_h02d
-    - hh_h02e
-    - hh_h03a
-    - hh_h03b
-    - hh_h03c
-    - hh_h04
+    # - hh_h01
+    # - hh_h02a
+    # - hh_h02b
+    # - hh_h02c
+    # - hh_h02d
+    # - hh_h02e
+    # - hh_h03a
+    # - hh_h03b
+    # - hh_h03c
+    # - hh_h04
     # - hh_h05a
     # - hh_h05b
     # - hh_h05c
@@ -149,18 +148,23 @@ keep_cols:
   HH_MOD_T.dta:
     - case_id
     - hhid
-    - hh_t01
-    - hh_t02
-    - hh_t03
-    - hh_t04
-    - hh_t05
-    - hh_t06
+    # - hh_t01
+    # - hh_t02
+    # - hh_t03
+    # - hh_t04
+    # - hh_t05
+    # - hh_t06
   HH_MOD_U.dta:
     - case_id
     - hhid
     - hh_u0a
     - hh_u02
     - hh_u01_1
+  HH_MOD_C.dta:
+    - case_id
+    - hhid
+    - pid
+    - hh_c09
 
 
 roster_file: 'HH_MOD_B.dta'

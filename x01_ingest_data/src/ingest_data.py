@@ -215,7 +215,7 @@ def remove_outliers(df: pd.DataFrame, config: dict[str, typing.Any], summary: pd
     # including a laughably high amount of durable assets and rent they could claim for their house.
     # The second one is also an anomaly insofar as it has an extremeley high amount of durable assets and consumption, but the numbers
     # seem less exaggerrated. 
-    df = df[~df["case_id"].isin(["210334510265"])]# ,  "107362180147"])]
+    df = df[~df["case_id"].isin(["210334510265"])]
 
     print(f"After dropping outliers, {len(df)} households of the original {original_num_households} remain.")
     return df, summary
@@ -488,10 +488,12 @@ def make_pre_encoding_summary(df: pd.DataFrame, df_reserved: pd.DataFrame, covar
     summary.to_csv("output/pre_encoding_summary.csv", index=False)
     df = df.drop(columns=['hh_f01', 'hh_f07', 'hh_f08', 'hh_f09', 'hh_f11', 
                           'hh_f12', 'hh_f19', 'hh_f36', 'hh_f41', 'hh_f41_4', 
-                          'hh_f43', 'hh_h01', 'hh_h04', 'hh_head_education',
+                          'hh_f43', 'hh_head_education',
                           'hh_head_has_cellphone', 'hh_head_labor_type',
-                          'hh_head_sex', 'hh_t01', 'hh_t02', 'hh_t03', 'hh_t04', 
+                          'hh_head_sex', 'hh_c09',
                           'region', 'reside', 'rexpagg', 'hh_e06_8a'])
+                        #   'hh_t01', 'hh_t02', 'hh_t03', 'hh_t04',
+                        #   'hh_h01', 'hh_h04'])
     return summary, df, missing_pcts
 
 def handle_shocks(shocks: pd.DataFrame) -> pd.DataFrame:
@@ -805,17 +807,21 @@ def add_roster(df: pd.DataFrame, roster_path: Path, config: dict[str, typing.Any
     individual_labor_df.columns = individual_labor_df.columns.str.lower()
     individual_labor_df = individual_labor_df[['pid', 'case_id','hhid', 'hh_e06_8a']]
     roster = merge_dfs(roster, individual_labor_df, 'HH_MOD_E.dta', on=['hhid', 'pid'])
+    education_df, meta = pyreadstat.read_dta('input/HH_MOD_C.dta')
+    education_df.columns = education_df.columns.str.lower()
+    education_df = education_df[['pid', 'case_id', 'hhid', 'hh_c09']]
+    roster = merge_dfs(roster, education_df, 'HH_MOD_C.dta', on=['hhid', 'pid'])
     hh_adult_counts = (
         roster[roster.adult].groupby('case_id')[['hhid']].count().rename(columns={'hhid': 'num_adults'})
     )
     hh_child_counts = (
         roster[~roster.adult].groupby('case_id')[['hhid']].count().rename(columns={'hhid': 'num_children'})
     )
-    hh_phone_counts = (
-        roster[['hh_b04a', 'case_id', 'hhid']].groupby('case_id')[["hhid"]].count().rename(columns={'hhid': 'num_phones'})
-    )
     hh_head_labor_type = (
         roster[roster['hh_b04'] == 1][['hhid', 'case_id', 'hh_e06_8a']].groupby('case_id')[['hh_e06_8a']].max().rename(columns={'hh_e06_8a': 'hh_head_labor_type'})
+    )
+    hh_head_education = (
+        roster[roster['hh_b04'] == 1][['hhid', 'case_id', 'hh_c09']].groupby('case_id')[['hh_c09']].max().rename(columns={'hh_c09': 'hh_head_education'})
     )
     # Taking the demographic info of the head of household
     hh_head_info = (
@@ -825,16 +831,15 @@ def add_roster(df: pd.DataFrame, roster_path: Path, config: dict[str, typing.Any
     hh_head_info = hh_head_info.rename(columns={
         'hh_b05a': 'hh_head_age',
         'hh_b03': 'hh_head_sex',
-        'hh_b21': 'hh_head_education',
-        'hh_b04a': 'hh_head_has_cellphone'
+        'hh_b04a': 'hh_head_has_cellphone',
     })
     df = (
         df
         .merge(hh_adult_counts, how='left', on='case_id')
         .merge(hh_child_counts, how='left', on='case_id')
-        .merge(hh_phone_counts, how='left', on='case_id')
         .merge(hh_head_info, how='left', on='case_id')
         .merge(hh_head_labor_type, how='left', on='case_id')
+        .merge(hh_head_education, how='left', on='case_id')
     )
     df[['num_adults', 'num_children']] = (
         df[['num_adults', 'num_children']].fillna(value=0)

@@ -1,11 +1,10 @@
-num_bootstraps: 100
 train_test_split_ratios:
   train: 0.75
   test: 0.25
-n_cpus: 5
+n_cpus: 10
 niceness: 3
-n_folds: 3
-random_state: 94704
+n_folds: 10
+random_state: 94705
 
 common_n_estimators: &common_n_estimators
   - 50
@@ -19,8 +18,10 @@ common_depths: &common_depths
 target_col: &target_col "outcome"
 weight_col: &weight_col "hh_wgt"
 id_col: &id_col "case_id"
-urban_or_rural: "urban_only"
-evaluate_on_urban_only: False
+urban_or_rural: "both"
+evaluate_on_urban_only: True
+use_expanded_data: False
+
 
 extras:
   - *target_col
@@ -30,10 +31,10 @@ extras:
   - pid
 
 models_to_run:
-  - Lasso
-  - RandomForest
-  - GradientBoosting
   - Stepwise
+  - RandomForest
+  - Lasso
+  - GradientBoosting
 
 
   
@@ -50,6 +51,6 @@ grid_search_params:
       - 5
       - 10
     learning_rate:
+      - 0.01
       - 0.1
       - 0.5
-      - 1.0
