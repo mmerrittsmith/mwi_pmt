@@ -50,7 +50,6 @@ dependencies:
   - ipykernel=6.28.0=py312h06a4308_0
   - ipython=8.27.0=py312h06a4308_0
   - jedi=0.19.1=py312h06a4308_0
-  - jinja2=3.1.4=py312h06a4308_0
   - joblib=1.4.2=py312h06a4308_0
   - jpeg=9e=h5eee18b_3
   - jupyter_client=8.6.0=py312h06a4308_0
@@ -149,7 +148,6 @@ dependencies:
   - tqdm=4.66.5=py312he106c6f_0
   - traitlets=5.14.3=py312h06a4308_0
   - tzdata=2024a=h04d1e81_0
-  - urllib3=2.2.2=py312h06a4308_0
   - utf8proc=2.6.1=h5eee18b_1
   - wcwidth=0.2.5=pyhd3eb1b0_0
   - wheel=0.44.0=py312h06a4308_0
